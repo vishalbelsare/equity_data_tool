@@ -22,10 +22,8 @@ RISK_FREE_SYMBOL = "USDOLLAR"
 
 
 np.random.seed(0)
-assets=all_assets.loc[np.random.choice(all_assets.index, NSTOCKS*1.2, replace=False)]
-if not RISK_FREE_SYMBOL in assets.index:
-    assets = assets.ix[:-1]
-    assets.loc[RISK_FREE_SYMBOL] = all_assets.loc[RISK_FREE_SYMBOL]
+assets=all_assets.loc[np.random.choice(all_assets.index[:-1], int(NSTOCKS*1.2), replace=False)]
+assets.loc[RISK_FREE_SYMBOL] = all_assets.loc[RISK_FREE_SYMBOL]
     
 # download assets' data
 data={}
@@ -109,10 +107,7 @@ returns = returns.loc[:,~returns.columns.isin(bad_assets)]
 if prices.shape[1]<NSTOCKS+1:
     raise Exception('Too many discarded stock. Change universe.')
     
-if RISK_FREE_SYMBOL in prices.columns[:NSTOCKS]:
-    used_symbols=prices.columns[:NSTOCKS+1]  
-else:
-    used_symbols=list(prices.columns[:NSTOCKS])+[RISK_FREE_SYMBOL]
+used_symbols=list(prices.columns[:NSTOCKS])+[RISK_FREE_SYMBOL]
     
 prices = prices.loc[:,prices.columns.isin(used_symbols)]
 sigmas = sigmas.loc[:,sigmas.columns.isin(used_symbols)]
