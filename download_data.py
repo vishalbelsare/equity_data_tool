@@ -6,7 +6,11 @@ import numpy as np
 import datetime as dt
 import quandl
 
-assets=pd.read_csv('assets.txt').set_index('Symbol')
+#all_assets=pd.read_csv('assets.txt', comment='#').set_index('Symbol')
+#all_assets=pd.read_csv('NASDAQ100.txt', comment='#').set_index('Symbol')
+all_assets=pd.read_csv('SP500.txt', comment='#').set_index('Symbol')
+
+NSTOCKS=100
 
 QUANDL={
     ## Get a key (free) from quandl.com and copy it here
@@ -16,43 +20,56 @@ QUANDL={
 }
 RISK_FREE_SYMBOL = "USDOLLAR"
 
-def data_query(asset):
-    print('downloading %s from %s to %s' %(asset, QUANDL['start_date'], QUANDL['end_date']))
-    return asset, quandl.get(assets.Quandlcode[asset], **QUANDL)
 
+np.random.seed(0)
+assets=all_assets.loc[np.random.choice(all_assets.index, NSTOCKS*1.2, replace=False)]
+if not RISK_FREE_SYMBOL in assets.index:
+    assets = assets.ix[:-1]
+    assets.loc[RISK_FREE_SYMBOL] = all_assets.loc[RISK_FREE_SYMBOL]
+    
 # download assets' data
-data=list(map(data_query, assets.index))
-
+data={}
+for ticker in assets.index:
+    print('downloading %s from %s to %s' %(ticker, QUANDL['start_date'], QUANDL['end_date']))
+    try:
+        data[ticker] = quandl.get(assets.Quandlcode[ticker], **QUANDL)
+    except quandl.NotFoundError:
+        print('\tInvalid asset code')
+        
 def select_first_valid_column(df, columns):
     for column in columns:
         if column in df.columns:
             return df[column]
-
 # extract prices
-prices=pd.DataFrame.from_items([(k,select_first_valid_column(v, ["Adj. Close", "Close", "VALUE"])) for k,v in data])
+prices=pd.DataFrame.from_items([(k,select_first_valid_column(v, ["Adj. Close", "Close", "VALUE"])) 
+                                for k,v in data.items()])
 
 #compute sigmas
-high=pd.DataFrame.from_items([(k,select_first_valid_column(v, ["High"])) for k,v in data])
-low=pd.DataFrame.from_items([(k,select_first_valid_column(v, ["Low"])) for k,v in data])
+high=pd.DataFrame.from_items([(k,select_first_valid_column(v, ["High"])) for k,v in data.items()])
+low=pd.DataFrame.from_items([(k,select_first_valid_column(v, ["Low"])) for k,v in data.items()])
 sigmas = (high-low) / (2*high)
 
 # extract volumes
-volumes=pd.DataFrame.from_items([(k,select_first_valid_column(v, ["Adj. Volume", "Volume"])) for k,v in data])
+volumes=pd.DataFrame.from_items([(k,select_first_valid_column(v, ["Adj. Volume", "Volume"])) for k,v in data.items()])
 
 # fix risk free
 prices[RISK_FREE_SYMBOL]=10000*(1 + prices[RISK_FREE_SYMBOL]/(100*250)).cumprod()
 
-
-
 # filter NaNs - threshold at 2% missing values
 bad_assets = prices.columns[prices.isnull().sum()>len(prices)*0.02]
 if len(bad_assets):
-    raise Exception('Assets %s have too many NaNs' % bad_assets)
+    print('Assets %s have too many NaNs, removing them' % bad_assets)
+
+prices = prices.loc[:,~prices.columns.isin(bad_assets)]
+sigmas = sigmas.loc[:,~sigmas.columns.isin(bad_assets)]
+volumes = volumes.loc[:,~volumes.columns.isin(bad_assets)]
+
+nassets=prices.shape[1]
 
 # days on which many assets have missing values
-bad_days1=sigmas.index[sigmas.isnull().sum(1) > 10]
-bad_days2=prices.index[prices.isnull().sum(1) > 10]
-bad_days3=volumes.index[volumes.isnull().sum(1) > 3]
+bad_days1=sigmas.index[sigmas.isnull().sum(1) > nassets*.9]
+bad_days2=prices.index[prices.isnull().sum(1) > nassets*.9]
+bad_days3=volumes.index[volumes.isnull().sum(1) > nassets*.9]
 bad_days=pd.Index(set(bad_days1).union(set(bad_days2)).union(set(bad_days3))).sort_values()
 print ("Removing these days from dataset:")
 print(pd.DataFrame({'nan price':prices.isnull().sum(1)[bad_days],
@@ -68,10 +85,11 @@ print(pd.DataFrame({'remaining nan price':prices.isnull().sum(),
                     'remaining nan volumes':volumes.isnull().sum(),
                     'remaining nan sigmas':sigmas.isnull().sum()}))
 prices=prices.fillna(method='ffill')
-prices=prices.fillna(method='bfill')
 sigmas=sigmas.fillna(method='ffill')
-sigmas=sigmas.fillna(method='bfill')
 volumes=volumes.fillna(method='ffill')
+print(pd.DataFrame({'remaining nan price':prices.isnull().sum(),
+                    'remaining nan volumes':volumes.isnull().sum(),
+                    'remaining nan sigmas':sigmas.isnull().sum()}))
 
 # make volumes in dollars
 volumes = volumes*prices
@@ -80,7 +98,26 @@ volumes = volumes*prices
 returns = (prices.diff()/prices.shift(1)).fillna(method='ffill').ix[1:]
 bad_assets = returns.columns[((-.5>returns).sum()>0)|((returns > 2.).sum()>0)]
 if len(bad_assets):
-    raise Exception('Assets %s have dubious returns' % bad_assets)
+    print('Assets %s have dubious returns' % bad_assets)
+    
+prices = prices.loc[:,~prices.columns.isin(bad_assets)]
+sigmas = sigmas.loc[:,~sigmas.columns.isin(bad_assets)]
+volumes = volumes.loc[:,~volumes.columns.isin(bad_assets)]
+returns = returns.loc[:,~returns.columns.isin(bad_assets)]
+
+# discard extra stocks
+if prices.shape[1]<NSTOCKS+1:
+    raise Exception('Too many discarded stock. Change universe.')
+    
+if RISK_FREE_SYMBOL in prices.columns[:NSTOCKS]:
+    used_symbols=prices.columns[:NSTOCKS+1]  
+else:
+    used_symbols=list(prices.columns[:NSTOCKS])+[RISK_FREE_SYMBOL]
+    
+prices = prices.loc[:,prices.columns.isin(used_symbols)]
+sigmas = sigmas.loc[:,sigmas.columns.isin(used_symbols)]
+volumes = volumes.loc[:,volumes.columns.isin(used_symbols)]
+returns = returns.loc[:,returns.columns.isin(used_symbols)]
 
 # save data
 prices.to_csv('prices.txt', float_format='%.3f')
